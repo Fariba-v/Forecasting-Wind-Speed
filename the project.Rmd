@@ -1,0 +1,427 @@
+---
+title: "Untitled"
+author: "Fariba"
+date: "2023-05-15"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r}
+getwd()
+setwd("E:/Bolton university/data science/assignment2")
+data <- read.csv("data.csv", header = FALSE)
+data
+```
+
+## Reshape the data
+Before going further, we reshape data to better work with the data.
+In order to do this, first, we keep the first two columns which are the locations:
+```{r}
+# Keep the first and second columns in variable location
+location <- data[, 1:2]
+location
+```
+
+
+And then we remove these columns from our dataset:
+```{r}
+# Remove the first and second columns from the data frame
+data <- subset(data, select = -c(1, 2))
+# Remove the row names from the data frame
+rownames(data) <- NULL
+data
+```
+
+Now, we reshape the data and add a new column for time:
+```{r reshape}
+# create an empty list to store the reshaped data frames
+data_list <- list()
+
+# loop over each row of the original time series
+for (i in 1:nrow(data)) {
+  
+  # extract the current row and convert to matrix
+  current_row <- as.matrix(data[i,])
+  
+  # reshape the current row and add column names
+  current_reshaped <- matrix(as.numeric(current_row), nrow = 248, ncol = 10, byrow = TRUE)
+  colnames(current_reshaped) <- c("TSK","PSFC","U10","V10","Q2","Rainc","Rainnc","Snow","TSLB","SMOIS")
+
+  # add a date column to the reshaped data
+  current_df <- cbind.data.frame(date = seq(as.POSIXct("2018-05-01 00:00:00"), as.POSIXct("2018-05-31 21:00:00"),
+                                            by = "3 hours"), current_reshaped)
+  
+  # add the current data frame to the list
+  data_list[[i]] <- current_df
+}
+
+# combine all data frames in the list into a single data frame
+final_df <- do.call(rbind, data_list)
+final_df
+```
+
+After that, we add location columns to our dataset
+```{r}
+# Repeat each location coordinate 248 times
+locations_rep <- data.frame(rep(location[[1]], each = 248), rep(location[[2]], each = 248))
+
+
+colnames(locations_rep) <- c("Latitude", "Longitude")
+
+# Merge final_df and locations_rep data frames
+df_with_locations <- cbind(final_df, locations_rep)
+
+df_with_locations
+```
+
+
+And then we move the last two columns to the first:
+```{r}
+# moving the last two columns to the first
+df <- df_with_locations[, c(ncol(df_with_locations)-1, ncol(df_with_locations), 1:(ncol(df_with_locations)-2))]
+df
+```
+
+## EDA(Exploratory Data Analysis)
+```{r}
+str(df)
+```
+```{r}
+summary(df)
+```
+```{r}
+head(df)
+```
+```{r}
+tail(df)
+```
+
+### Check for missing values
+```{r}
+sum(is.na(df))
+```
+
+### Visualizing the data
+```{r warning=FALSE}
+library(ggplot2)
+ggplot(df , aes(x = U10)) + 
+   geom_histogram(binwidth = 2, fill ="blue", alpha = 0.7) + 
+   labs(title = "Histogram of U10", x = "X component of wind at 10m", y = "frequency")
+```
+```{r warning=FALSE}
+library(ggplot2)
+ggplot(df , aes(x = V10)) + 
+   geom_histogram(binwidth = 2, fill ="blue", alpha = 0.7) + 
+   labs(title = "Histogram of V10", x = "Y component of wind at 10m", y = "frequency")
+```
+```{r warning=FALSE}
+ggplot(df, aes(x = U10, y = V10)) + 
+   geom_point(color = "blue") + 
+   labs(x = "U10", y = "V10")
+```
+
+
+## Data cleaning
+### Check duplicates
+```{r}
+sum(duplicated(df))
+```
+```{r}
+sum(is.na(df))
+```
+```{r include=FALSE}
+library(imputeTS)
+```
+
+```{r warning=FALSE}
+df <- na.interpolation(df)
+df
+```
+```{r}
+sum(is.na(df))
+```
+
+## Create a new column for wind speed
+```{r}
+df$wind_speed <- sqrt(df$U10^2 + df$V10^2)
+df
+```
+
+## detecting outliers
+```{r}
+ggplot(df, aes(y = wind_speed))+
+  geom_boxplot(fill= "blue", alpha = 0.7)+
+  labs(title = "Box Plot of wind_speed", y = "wind_speed")
+```
+```{r include=FALSE}
+library(dplyr)
+```
+```{r}
+df %>%
+  select(wind_speed) %>%
+  summarise(
+    lower_extremes = quantile(wind_speed, 0),
+    lower_quartile = quantile(wind_speed, 0.25),
+    median = quantile(wind_speed, 0.5),
+    upper_quartile = quantile(wind_speed, 0.75),
+    upper_extremes = quantile(wind_speed, 1),
+    random_quartile = quantile(wind_speed, 0.8)
+  )
+```
+```{r}
+data <- df$wind_speed
+z_scores <- scale(data)
+threshold <- 3
+z_outliers <- data[abs(z_scores) > threshold]
+print(z_outliers)
+```
+
+## Replace the outliers with the Winsorized values
+```{r include=FALSE}
+library(DescTools)
+```
+
+```{r}
+winsorized_data <- Winsorize(data, probs = c(0.05, 0.95))
+data[z_outliers] <- winsorized_data[z_outliers]
+data <- winsorized_data
+head(data)
+```
+```{r}
+boxplot(data, main = "Box Plot of wind_speed after Handling Outliers")
+```
+```{r}
+df$wind_speed <- data
+df
+```
+
+## Keep 2 columns
+```{r}
+df %>%
+  filter(Latitude  == 56.781 & Longitude == 3.508) %>%
+  select(date, wind_speed) -> df
+df
+```
+
+```{r}
+str(df)
+```
+
+## Time series plot
+```{r}
+ggplot(df, aes(x = date, y = wind_speed)) +
+  geom_line(color = "blue") +
+  labs(title = "wind speed Over Time",
+       x = "Date and Time",
+       y = "wind speed") +
+  theme_minimal()
+```
+```{r}
+df <- df %>%
+  mutate(time = as.numeric(difftime(date, min(date), units = "hours")))
+df
+```
+
+## Split the data into training and test sets
+```{r}
+set.seed(123)
+train_indices <- sample(1:nrow(df), 0.8 * nrow(df))
+train_data <- df[train_indices, ]
+test_data <- df[-train_indices, ]
+str(train_data)
+str(test_data)
+```
+
+## Model1: ARIMA
+```{r include=FALSE}
+library(forecast)
+```
+
+```{r}
+#fit the ARIMA model
+arima_model <- auto.arima(train_data$wind_speed)
+summary(arima_model)
+```
+```{r}
+# forecast
+arima_forecast <- forecast(arima_model, h = length(test_data$wind_speed))
+
+# evaluate
+arima_accuracy <- accuracy(arima_forecast, test_data$wind_speed)
+cat("ARIMA Model Accuracy:", arima_accuracy[, 'RMSE'])
+```
+
+## Model2: Linear regression
+```{r}
+# Fit the model on the training set
+train_model <- lm(wind_speed ~ time, data = train_data)
+summary(train_model)
+
+# Predict wind_speed values for the test set
+predictions <- predict(train_model, newdata = test_data)
+
+# Calculate the root mean squared error (RMSE)
+rmse_lr <- sqrt(mean((test_data$wind_speed - predictions)^2))
+cat("RMSE_lr:", rmse_lr)
+```
+```{r}
+#Plot Actual vs Predicted values
+ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = predictions), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()
+```
+
+## Model3: SVR
+```{r warning=FALSE, include=FALSE}
+library(e1071)
+```
+
+```{r warning=FALSE}
+# Fit an SVR model on the training set
+# 1.Radial basis function (RBF) kernel
+svr_model_RBF <- svm(wind_speed ~ time, data = train_data, kernel = "radial")
+# Display the SVR model summary
+summary(svr_model_RBF)
+```
+```{r warning=FALSE}
+# 2.Linear kernel
+svr_model_linear <- svm(wind_speed ~ time, data = train_data, kernel = "linear")
+# Display the SVR model summary
+summary(svr_model_linear)
+```
+```{r warning=FALSE}
+# 3.Polynomial kernel
+svr_model_poly <- svm(wind_speed ~ time, data = train_data, kernel = "polynomial")
+# Display the SVR model summary
+summary(svr_model_poly)
+```
+```{r warning=FALSE}
+# Predict wind_speed values for the test set using the SVR models
+svr_predictions_RBF <- predict(svr_model_RBF, newdata = test_data)
+svr_predictions_linear <- predict(svr_model_linear, newdata = test_data)
+svr_predictions_poly <- predict(svr_model_poly, newdata = test_data)
+
+# Calculate the root mean squared error (RMSE) for the SVR models
+svr_rmse_RBF <- sqrt(mean((test_data$wind_speed - svr_predictions_RBF)^2))
+svr_rmse_linear <- sqrt(mean((test_data$wind_speed - svr_predictions_linear)^2))
+svr_rmse_poly <- sqrt(mean((test_data$wind_speed - svr_predictions_poly)^2))
+cat("SVR_RBF RMSE:", svr_rmse_RBF, "\n")
+cat("SVR_linear RMSE:", svr_rmse_linear, "\n")
+cat("SVR_poly RMSE:", svr_rmse_poly, "\n")
+```
+```{r warning=FALSE, include=FALSE}
+library(gridExtra)
+```
+
+```{r}
+
+# Plot the actual vs. predicted values for the SVR models
+p1 <- ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = svr_predictions_RBF), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "SVR_RBF: Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()+
+  theme(text = element_text(size = 8))
+
+p2 <- ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = svr_predictions_linear), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "SVR_linear: Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()+
+  theme(text = element_text(size = 8))
+
+p3 <- ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = svr_predictions_poly), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "SVR_poly: Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()+
+  theme(text = element_text(size = 8))
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+## Model4: Random forest
+```{r warning=FALSE, include=FALSE}
+library(randomForest)
+```
+```{r}
+# Fit a Random Forest model on the training set
+rf_model_n100 <- randomForest(wind_speed ~ time, data = train_data, ntree = 100)
+# Display the Random Forest model summary
+summary(rf_model_n100)
+```
+```{r}
+# Fit a Random Forest model on the training set
+rf_model_n200 <- randomForest(wind_speed ~ time, data = train_data, ntree = 200)
+# Display the Random Forest model summary
+summary(rf_model_n200)
+```
+```{r}
+# Fit a Random Forest model on the training set
+rf_model_n300 <- randomForest(wind_speed ~ time, data = train_data, ntree = 300)
+# Display the Random Forest model summary
+summary(rf_model_n300)
+```
+```{r}
+# Predict wind_speed values for the test set using the Random Forest model
+rf_predictions_n100 <- predict(rf_model_n100, newdata = test_data)
+rf_predictions_n200 <- predict(rf_model_n200, newdata = test_data)
+rf_predictions_n300 <- predict(rf_model_n300, newdata = test_data)
+
+# Calculate the root mean squared error (RMSE) for the Random Forest model
+rf_rmse_n100 <- sqrt(mean((test_data$wind_speed - rf_predictions_n100)^2))
+rf_rmse_n200 <- sqrt(mean((test_data$wind_speed - rf_predictions_n200)^2))
+rf_rmse_n300 <- sqrt(mean((test_data$wind_speed - rf_predictions_n300)^2))
+cat("Random Forest n100 RMSE:", rf_rmse_n100, "\n")
+cat("Random Forest n200 RMSE:", rf_rmse_n200, "\n")
+cat("Random Forest n300 RMSE:", rf_rmse_n300, "\n")
+```
+```{r}
+# Plot the actual vs. predicted values for the Linear Regression, SVR, and Random Forest models
+p1 <- ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = rf_predictions_n100), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Random Forest: Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()+
+  theme(text = element_text(size = 8))
+
+p2 <- ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = rf_predictions_n200), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Random Forest: Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()+
+  theme(text = element_text(size = 8))
+
+p3 <- ggplot() +
+  geom_point(data = test_data, aes(x = wind_speed, y = rf_predictions_n300), color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Random Forest: Actual vs. Predicted wind_speed",
+       x = "Actual wind_speed",
+       y = "Predicted wind_speed") +
+  theme_minimal()+
+  theme(text = element_text(size = 8))
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+```{r}
+rmse_values <- c(arima_accuracy[ ,'RMSE'], rmse_lr, svr_rmse_RBF,svr_rmse_linear,svr_rmse_poly,rf_rmse_n100,rf_rmse_n200,rf_rmse_n300)
+names = c("ARIMA_trainig", "ARIMA_test", "Linear Regression", "SVR RBF", "SVR Linear", "SVR Poly", "RF 100", "RF 200", "RF 300")
+barplot(rmse_values, names.arg = names, xlab = "Model", ylab = "RMSE",main = "RMSE for Different Models", legend = names, col = c("red", "blue", "green", "yellow", "purple", "orange", "pink", "gray"),ylim = c(0, 3))
+```
+
